@@ -30,6 +30,7 @@ n_games = 40
 
 agent_a, agent_b = BasicAgent(), NewAgent()
 
+# we are agent_b
 players = [agent_a, agent_b]  # 用于切换先后手
 target_ball_choice = ['solid', 'solid', 'stripe', 'stripe']  # 轮换球型
 
@@ -37,8 +38,10 @@ for i in range(n_games):
     print()
     print(f"------- 第 {i} 局比赛开始 -------")
     env.reset(target_ball=target_ball_choice[i % 4])
+    # pre-initialize target balls for both agents, rather than waiting for first ball pocketed
     print(f"本局 Player A: {players[i % 2].__class__.__name__}, 目标球型: {target_ball_choice[i % 4]}")
     while True:
+        # normal game loop
         player = env.get_curr_player()
         print(f"[第{env.hit_count}次击球] player: {player}")
         obs = env.get_observation(player)

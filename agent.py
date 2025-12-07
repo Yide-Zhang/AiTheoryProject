@@ -40,33 +40,53 @@ def analyze_shot_for_reward(shot: pt.System, last_state: dict, player_targets: l
     """
     
     # 1. 基本分析
+    # bid: ball_id
+    # last_state enumerated: 0=on_table, 1=in_hand, 2=in_air, 3=rolling, 4=pocketed
     new_pocketed = [bid for bid, b in shot.balls.items() if b.state.s == 4 and last_state[bid].state.s != 4]
     
+    # separate own and enemy pocketed balls
     own_pocketed = [bid for bid in new_pocketed if bid in player_targets]
     enemy_pocketed = [bid for bid in new_pocketed if bid not in player_targets and bid not in ["cue", "8"]]
     
+    # check if cue or 8 ball is pocketed for fouls
+    # used for scoring later
+    # cue chinese: 白球
     cue_pocketed = "cue" in new_pocketed
     eight_pocketed = "8" in new_pocketed
 
     # 2. 分析首球碰撞
+    # initialization
     first_contact_ball_id = None
     foul_first_hit = False
     
+    # what is a shot event?
+    # An event is an occurrence during the shot, such as a ball collision, cushion hit, or pocketing.
+    # Each event has an event_type and associated ball IDs.
+    # We analyze these events to determine the first ball hit by the cue ball.
+    # cushion chinese: 库边
     for e in shot.events:
+        # event_type: cushion_hit, ball_collision, pocketed, etc.
         et = str(e.event_type).lower()
+        # ids involved in the event
         ids = list(e.ids) if hasattr(e, 'ids') else []
+        # first ball collision that is not cushion or pocket
         if ('cushion' not in et) and ('pocket' not in et) and ('cue' in ids):
+            # find the first ball hit that is not the cue ball
             other_ids = [i for i in ids if i != 'cue']
+            # take the first one
             if other_ids:
                 first_contact_ball_id = other_ids[0]
                 break
     
+    # judge foul on first hit
     if first_contact_ball_id is None:
         if len(last_state) > 2:  # 只有白球和8号球时不算犯规
              foul_first_hit = True
     else:
         remaining_own_before = [bid for bid in player_targets if last_state[bid].state.s != 4]
         opponent_plus_eight = [bid for bid in last_state.keys() if bid not in player_targets and bid not in ['cue']]
+        # why force add '8'?
+        # because if opponent has no balls left, hitting 8 first is still a foul
         if ('8' not in opponent_plus_eight):
             opponent_plus_eight.append('8')
             
@@ -74,6 +94,7 @@ def analyze_shot_for_reward(shot: pt.System, last_state: dict, player_targets: l
             foul_first_hit = True
     
     # 3. 分析碰库
+    # initialization
     cue_hit_cushion = False
     target_hit_cushion = False
     foul_no_rail = False
@@ -87,12 +108,25 @@ def analyze_shot_for_reward(shot: pt.System, last_state: dict, player_targets: l
             if first_contact_ball_id is not None and first_contact_ball_id in ids:
                 target_hit_cushion = True
 
+    # judge no-rail foul: 
+    # 1st contact ball and cue ball must not hit cushion
+    # and no balls pocketed
+    # why target hit cushion?
+    # because if the first contacted ball hits cushion, it's not a no-rail foul
+    # no-rail foul chinese: 无库犯规, specifically 指击球后白球和首球均未碰库边
     if len(new_pocketed) == 0 and first_contact_ball_id is not None and (not cue_hit_cushion) and (not target_hit_cushion):
         foul_no_rail = True
         
     # 计算奖励分数
     score = 0
-    
+    # both cue and 8 ball pocketed: big foul, -150
+    # only cue pocketed: foul, -100
+    # only 8 ball pocketed: +100 if legal else -150
+    # foul on first hit: -30
+    # foul no rail: -30
+    # each own ball pocketed: +50
+    # each enemy ball pocketed: -20
+    # no events at all (no pocket, no foul): +10 small reward to encourage
     if cue_pocketed and eight_pocketed:
         score -= 150
     elif cue_pocketed:
@@ -114,6 +148,7 @@ def analyze_shot_for_reward(shot: pt.System, last_state: dict, player_targets: l
         
     return score
 
+# TODO: complete Agent classes
 class Agent():
     """Agent 基类"""
     def __init__(self):
@@ -145,7 +180,7 @@ class Agent():
         return action
 
 
-
+# Optional: Implement a basic agent using Bayesian Optimization
 class BasicAgent(Agent):
     """基于贝叶斯优化的智能 Agent"""
     
@@ -194,6 +229,11 @@ class BasicAgent(Agent):
         返回：
             BayesianOptimization对象
         """
+        # what are these?
+        # GaussianProcessRegressor: 用于贝叶斯优化的高斯过程回归模型, 用于拟合目标函数
+        # Matern: 一种常用的核函数, 用于定义高斯过程的协方差结构
+        # SequentialDomainReductionTransformer: 用于动态缩小搜索空间
+        # BayesianOptimization: 贝叶斯优化器主体
         gpr = GaussianProcessRegressor(
             kernel=Matern(nu=2.5),
             alpha=self.ALPHA,
@@ -322,6 +362,7 @@ class BasicAgent(Agent):
             traceback.print_exc()
             return self._random_action()
 
+# Optional: Student-defined Agent
 class NewAgent(Agent):
     """自定义 Agent 模板（待学生实现）"""
     
