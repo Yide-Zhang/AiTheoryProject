@@ -22,7 +22,7 @@ import os
 from datetime import datetime
 import random
 
-from agent import Agent, BasicAgent, NewAgent
+from agents import Agent, BasicAgent, BasicAgentPro, NewAgent
 
 
 def collect_ball_states(shot):
@@ -302,11 +302,15 @@ class PoolEnv():
 
         events = shot.events
         first_contact_ball_id = None
+        # 定义合法的球ID集合（排除 'cue' 和其他非球对象如 'cue stick'）
+        valid_ball_ids = {'1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15'}
+        
         for e in events:
             et = str(e.event_type).lower()
             ids = list(e.ids) if hasattr(e, 'ids') else []
             if ('cushion' not in et) and ('pocket' not in et) and ('cue' in ids):
-                other_ids = [i for i in ids if i != 'cue']
+                # 过滤掉 'cue' 和非球对象（如 'cue stick'），只保留合法的球ID
+                other_ids = [i for i in ids if i != 'cue' and i in valid_ball_ids]
                 if other_ids:
                     first_contact_ball_id = other_ids[0]
                     break
@@ -362,10 +366,8 @@ class PoolEnv():
         remaining_own_before = [bid for bid in self.player_targets[player] if self.last_state[bid].state.s != 4]
         # 黑8掉袋 (胜负判断)
         if "8" in new_pocketed:
-            # 检查当前玩家是否清空了自己所有球
-            remaining_own = [bid for bid in self.player_targets[player] if self.balls[bid].state.s != 4]
-            
-            if len(remaining_own) == 0:
+            # 检查击球前是否已清空所有目标球（不能同时打进最后目标球+黑8）
+            if len(remaining_own_before) == 0:
                 print(f"🏆 Player {player} 成功打进黑8，获胜！")
                 self.winner = self.players[self.curr_player]
             else:
@@ -376,9 +378,11 @@ class PoolEnv():
             return {'ME_INTO_POCKET': own_pocketed, 'ENEMY_INTO_POCKET': enemy_pocketed, 'WHITE_BALL_INTO_POCKET': False, 'BLACK_BALL_INTO_POCKET': True, 'FOUL_FIRST_HIT': False, 'NO_POCKET_NO_RAIL': False, 'BALLS': copy.deepcopy(self.balls)}
 
         if first_contact_ball_id is None:
-            print(f"⚠️ 本杆白球未接触任何球，交换球权。")
+            print(f"⚠️ 本杆白球未接触任何球，犯规，恢复上一杆状态，交换球权。")
+            # 保存击打前的balls状态用于返回
+            balls_before_shot = copy.deepcopy(self.last_state)
+            self.balls = restore_balls_state(self.last_state)
             self.curr_player = 1 - self.curr_player
-            self.last_state = save_balls_state(self.balls)
             self.hit_count += 1
             if self.hit_count >= self.MAX_HIT_COUNT:
                 print(f"⏰ 达到最大击球数，比赛结束！")
@@ -392,16 +396,23 @@ class PoolEnv():
                 else:
                     self.winner = "SAME"
                 print(f"📊 最大击球数详情：Player A剩余 {a_left}，Player B剩余 {b_left}，胜者：{self.winner}")
-            return {'ME_INTO_POCKET': own_pocketed, 'ENEMY_INTO_POCKET': enemy_pocketed, 'WHITE_BALL_INTO_POCKET': False, 'BLACK_BALL_INTO_POCKET': False, 'FOUL_FIRST_HIT': False, 'NO_POCKET_NO_RAIL': False, 'NO_HIT': True, 'BALLS': copy.deepcopy(self.balls)}
-
+            return {'ME_INTO_POCKET': own_pocketed, 'ENEMY_INTO_POCKET': enemy_pocketed, 'WHITE_BALL_INTO_POCKET': False, 'BLACK_BALL_INTO_POCKET': False, 'FOUL_FIRST_HIT': False, 'NO_POCKET_NO_RAIL': False, 'NO_HIT': True, 'BALLS': balls_before_shot}
         if first_contact_ball_id is not None:
             opponent_plus_eight = [bid for bid in self.balls.keys() if bid not in self.player_targets[player] and bid not in ['cue']]
             if ('8' not in opponent_plus_eight):
                 opponent_plus_eight.append('8')
-            if len(remaining_own_before) > 0 and first_contact_ball_id in opponent_plus_eight:
-                print(f"⚠️ Player {player} 首次碰撞为对方球或黑8，交换球权。")
+            # 当有自己的球剩余时，首次碰撞对方球或黑8犯规
+            # 当只剩黑八时，必须首次碰撞黑八，否则碰到对手球也犯规
+            if (len(remaining_own_before) > 0 and first_contact_ball_id in opponent_plus_eight) or \
+               (len(remaining_own_before) == 0 and first_contact_ball_id != '8'):
+                if len(remaining_own_before) == 0:
+                    print(f"⚠️ Player {player} 只剩黑八时首次碰撞非黑八球，犯规，恢复上一杆状态，交换球权。")
+                else:
+                    print(f"⚠️ Player {player} 首次碰撞为对方球或黑八，犯规，恢复上一杆状态，交换球权。")
+                # 保存击打前的balls状态用于返回
+                balls_before_shot = copy.deepcopy(self.last_state)
+                self.balls = restore_balls_state(self.last_state)
                 self.curr_player = 1 - self.curr_player
-                self.last_state = save_balls_state(self.balls)
                 self.hit_count += 1
                 if self.hit_count >= self.MAX_HIT_COUNT:
                     print(f"⏰ 达到最大击球数，比赛结束！")
@@ -417,25 +428,48 @@ class PoolEnv():
                     print(f"📊 最大击球数详情：A剩余 {a_left}，B剩余 {b_left}，胜者：{self.winner}")
                 return {'ME_INTO_POCKET': own_pocketed, 'ENEMY_INTO_POCKET': enemy_pocketed, 'WHITE_BALL_INTO_POCKET': False, 'BLACK_BALL_INTO_POCKET': False, 'FOUL_FIRST_HIT': True, 'NO_POCKET_NO_RAIL': False, 'BALLS': copy.deepcopy(self.balls)}
 
-        if len(new_pocketed) == 0 and ((not cue_hit_cushion) or (not target_hit_cushion)):
-            print(f"⚠️ 本杆无进球且母球或目标球未碰库，交换球权。")
-            self.curr_player = 1 - self.curr_player
-            self.last_state = save_balls_state(self.balls)
-            self.hit_count += 1
-            if self.hit_count >= self.MAX_HIT_COUNT:
-                print(f"⏰ 达到最大击球数，比赛结束！")
-                self.done = True
-                a_left = len([bid for bid in self.player_targets["A"] if bid != '8' and self.balls[bid].state.s != 4])
-                b_left = len([bid for bid in self.player_targets["B"] if bid != '8' and self.balls[bid].state.s != 4])
-                if a_left < b_left:
-                    self.winner = "A"
-                elif b_left < a_left:
-                    self.winner = "B"
-                else:
-                    self.winner = "SAME"
-                print(f"📊 最大击球数详情：A剩余 {a_left}，B剩余 {b_left}，胜者：{self.winner}")
-            return {'ME_INTO_POCKET': own_pocketed, 'ENEMY_INTO_POCKET': enemy_pocketed, 'WHITE_BALL_INTO_POCKET': False, 'BLACK_BALL_INTO_POCKET': False, 'FOUL_FIRST_HIT': False, 'NO_POCKET_NO_RAIL': True, 'BALLS': copy.deepcopy(self.balls)}
-
+        # 处理无进球的情况
+        if len(new_pocketed) == 0:
+            if (not cue_hit_cushion) and (not target_hit_cushion):
+                # 无进球且无球碰库，犯规
+                print(f"⚠️ 本杆无进球且母球和目标球均未碰库，犯规，恢复上一杆状态，交换球权。")
+                # 保存击打前的balls状态用于返回
+                balls_before_shot = copy.deepcopy(self.last_state)
+                self.balls = restore_balls_state(self.last_state)
+                self.curr_player = 1 - self.curr_player
+                self.hit_count += 1
+                if self.hit_count >= self.MAX_HIT_COUNT:
+                    print(f"⏰ 达到最大击球数，比赛结束！")
+                    self.done = True
+                    a_left = len([bid for bid in self.player_targets["A"] if bid != '8' and self.balls[bid].state.s != 4])
+                    b_left = len([bid for bid in self.player_targets["B"] if bid != '8' and self.balls[bid].state.s != 4])
+                    if a_left < b_left:
+                        self.winner = "A"
+                    elif b_left < a_left:
+                        self.winner = "B"
+                    else:
+                        self.winner = "SAME"
+                    print(f"📊 最大击球数详情：A剩余 {a_left}，B剩余 {b_left}，胜者：{self.winner}")
+                return {'ME_INTO_POCKET': own_pocketed, 'ENEMY_INTO_POCKET': enemy_pocketed, 'WHITE_BALL_INTO_POCKET': False, 'BLACK_BALL_INTO_POCKET': False, 'FOUL_FIRST_HIT': False, 'NO_POCKET_NO_RAIL': True, 'BALLS': balls_before_shot}
+            else:
+                # 无进球但有球碰库，仅交换球权
+                print(f"⚠️ 本杆无进球，交换球权。")
+                self.curr_player = 1 - self.curr_player
+                self.last_state = save_balls_state(self.balls)
+                self.hit_count += 1
+                if self.hit_count >= self.MAX_HIT_COUNT:
+                    print(f"⏰ 达到最大击球数，比赛结束！")
+                    self.done = True
+                    a_left = len([bid for bid in self.player_targets["A"] if bid != '8' and self.balls[bid].state.s != 4])
+                    b_left = len([bid for bid in self.player_targets["B"] if bid != '8' and self.balls[bid].state.s != 4])
+                    if a_left < b_left:
+                        self.winner = "A"
+                    elif b_left < a_left:
+                        self.winner = "B"
+                    else:
+                        self.winner = "SAME"
+                    print(f"📊 最大击球数详情：A剩余 {a_left}，B剩余 {b_left}，胜者：{self.winner}")
+                return {'ME_INTO_POCKET': own_pocketed, 'ENEMY_INTO_POCKET': enemy_pocketed, 'WHITE_BALL_INTO_POCKET': False, 'BLACK_BALL_INTO_POCKET': False, 'FOUL_FIRST_HIT': False, 'NO_POCKET_NO_RAIL': False, 'BALLS': copy.deepcopy(self.balls)}
         
         # 判断是否打进自己球，确定下一个击球方
         if own_pocketed:
