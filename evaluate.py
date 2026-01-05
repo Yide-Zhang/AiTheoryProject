@@ -80,6 +80,9 @@ for i in range(n_games):
             else:
                 results[['AGENT_A_WIN', 'AGENT_B_WIN'][(i+1) % 2]] += 1
             break
+    
+    print(f"------- 第 {i} 局比赛结束 -------")
+    print(f"当前比分： Agent A 胜 {results['AGENT_A_WIN']} 局， Agent B 胜 {results['AGENT_B_WIN']} 局， 平局 {results['SAME']} 局")
 
 # 计算分数：胜1分，负0分，平局0.5
 results['AGENT_A_SCORE'] = results['AGENT_A_WIN'] * 1 + results['SAME'] * 0.5
