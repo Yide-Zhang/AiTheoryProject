@@ -24,7 +24,7 @@ import random
 # 导入必要的模块
 from utils import set_random_seed
 from poolenv import PoolEnv
-from agents import BasicAgent, BasicAgentPro, IntegratedAgent
+from agents import BasicAgent, BasicAgentPro, FastHybridAgentV1, IntegratedAgent
 
 # 设置随机种子，enable=True 时使用固定种子，enable=False 时使用完全随机
 # 根据需求，我们在这里统一设置随机种子，确保 agent 双方的全局击球扰动使用相同的随机状态
@@ -36,7 +36,7 @@ n_games = 40  # 对战局数 自己测试时可以修改 扩充为120局为了�
 
 ## 选择对打的对手
 # agent_a, agent_b = BasicAgent(), IntegratedAgent() # 与 BasicAgent 对打
-agent_a, agent_b = BasicAgentPro(), IntegratedAgent() # 与 BasicAgentPro 对打
+agent_a, agent_b = BasicAgent(), FastHybridAgentV1() # 与 BasicAgentPro 对打
 
 # we are agent_b
 players = [agent_a, agent_b]  # 用于切换先后手
@@ -68,9 +68,9 @@ for i in range(n_games):
             if step_info.get('NO_HIT'):
                 print("本杆判罚：白球未接触任何球，直接交换球权。")
             if step_info.get('ME_INTO_POCKET'):
-                print(f"我方球入袋：{step_info['ME_INTO_POCKET']}")
+                print(f"[{players[i % 2].__class__.__name__ if player == 'A' else players[(i + 1) % 2].__class__.__name__}]方球入袋：{step_info['ME_INTO_POCKET']}")
             if step_info.get('ENEMY_INTO_POCKET'):
-                print(f"对方球入袋：{step_info['ENEMY_INTO_POCKET']}")
+                print(f"[{players[(i + 1) % 2].__class__.__name__ if player == 'A' else players[i % 2].__class__.__name__}]方球入袋：{step_info['ENEMY_INTO_POCKET']}")
         if done:
             # 统计结果（player A/B 转换为 agent A/B） 
             if info['winner'] == 'SAME':
@@ -82,7 +82,7 @@ for i in range(n_games):
             break
     
     print(f"------- 第 {i} 局比赛结束 -------")
-    print(f"当前比分： Agent A 胜 {results['AGENT_A_WIN']} 局， Agent B 胜 {results['AGENT_B_WIN']} 局， 平局 {results['SAME']} 局")
+    print(f"当前比分： {players[0].__class__.__name__} 胜 {results['AGENT_A_WIN']} 局， {players[1].__class__.__name__} 胜 {results['AGENT_B_WIN']} 局， 平局 {results['SAME']} 局")
 
 # 计算分数：胜1分，负0分，平局0.5
 results['AGENT_A_SCORE'] = results['AGENT_A_WIN'] * 1 + results['SAME'] * 0.5
