@@ -1,507 +1,768 @@
-这个问题很关键！未清空己方球时打进黑8是严重犯规，直接导致输局。需要从多个层面解决：
+很好，这说明你的防御策略生效了，但进攻性不足。我们需要一个**平衡的策略**：既要安全避免黑8犯规，又要在机会出现时积极进攻。让我提供一个**平衡型Agent**：
 
-## 1. **在动作生成阶段避免**
+## 1. **智能风险评估与决策树**
 
 ```python
-class SafeActionGenerator:
-    """安全的动作生成器，避免过早击打黑8"""
+class BalancedAgent(Agent):
+    """平衡型Agent - 在安全和进攻间找到平衡"""
     
-    def __init__(self):
+    def __init__(self, risk_tolerance=0.7):
+        """
+        risk_tolerance: 风险容忍度 (0.0-1.0)
+            0.0 = 极度保守, 1.0 = 极度激进
+        """
+        super().__init__()
+        self.risk_tolerance = risk_tolerance
         self.ball_radius = 0.028575
         
-    def generate_safe_actions(self, balls, my_targets, table, strategy='offensive'):
-        """生成安全的动作，避免未清台时打进黑8"""
+        # 关键：不同局面的策略优先级
+        self.strategy_weights = {
+            'high_risk_low_reward': 0.1,   # 高风险低回报：避免
+            'medium_risk_high_reward': 0.7, # 中风险高回报：考虑
+            'low_risk_high_reward': 0.9,   # 低风险高回报：优先
+            'safety_only': 0.3,            # 纯安全球：次要
+        }
+        
+        print(f"BalancedAgent 已初始化 (风险容忍度: {risk_tolerance})")
+    
+    def decision(self, balls, my_targets, table):
+        """平衡决策：评估局面后选择最优策略"""
+        # 1. 快速局面分析
+        game_state = self._analyze_game_state(balls, my_targets)
+        
+        # 2. 根据局面选择主策略
+        main_strategy = self._select_main_strategy(game_state)
+        
+        # 3. 生成对应策略的动作
+        candidate_actions = self._generate_balanced_actions(
+            balls, my_targets, table, main_strategy, game_state
+        )
+        
+        # 4. 快速评估和选择
+        if not candidate_actions:
+            return self._smart_fallback_action(balls, my_targets, table)
+        
+        best_action = self._quick_evaluation(candidate_actions, balls, my_targets, table)
+        
+        return best_action
+    
+    def _analyze_game_state(self, balls, my_targets):
+        """分析当前游戏状态，返回关键指标"""
+        state = {
+            'own_remaining': 0,
+            'opponent_remaining': 0,
+            'cue_position_risk': 0,
+            'easy_shots_available': 0,
+            'eight_ball_danger': 0,
+            'offensive_opportunity': 0
+        }
+        
+        # 计算己方剩余球数
+        state['own_remaining'] = sum(1 for bid in my_targets 
+                                    if bid in balls and balls[bid].state.s != 4)
+        
+        # 计算对方剩余球数
+        all_balls = set(['1','2','3','4','5','6','7','9','10','11','12','13','14','15'])
+        opponent_targets = [bid for bid in all_balls if bid not in my_targets]
+        state['opponent_remaining'] = sum(1 for bid in opponent_targets 
+                                         if bid in balls and balls[bid].state.s != 4)
+        
+        # 分析白球位置风险
+        cue_ball = balls.get('cue')
+        if cue_ball:
+            cue_pos = cue_ball.state.rvw[0]
+            # 白球是否在袋口附近
+            state['cue_position_risk'] = self._calculate_cue_risk(cue_pos, table)
+            
+            # 计算容易进球的机会
+            state['easy_shots_available'] = self._count_easy_shots(cue_pos, balls, my_targets, table)
+        
+        # 黑8风险分析
+        eight_ball = balls.get('8')
+        if eight_ball:
+            state['eight_ball_danger'] = self._evaluate_eight_ball_danger(
+                eight_ball.state.rvw[0], table, balls
+            )
+        
+        # 进攻机会评估
+        state['offensive_opportunity'] = self._evaluate_offensive_opportunity(
+            balls, my_targets, table
+        )
+        
+        return state
+    
+    def _select_main_strategy(self, game_state):
+        """根据局面选择主要策略"""
+        own = game_state['own_remaining']
+        opp = game_state['opponent_remaining']
+        easy_shots = game_state['easy_shots_available']
+        eight_danger = game_state['eight_ball_danger']
+        
+        # 决策逻辑：
+        if own == 0:
+            # 只剩黑8
+            return 'eight_ball_only'
+        elif easy_shots >= 2 and eight_danger < 0.3:
+            # 有多个容易进球且黑8安全：进攻
+            return 'aggressive_clearance'
+        elif opp <= 2 and own <= 3:
+            # 接近尾声：混合策略
+            return 'mixed_endgame'
+        elif easy_shots == 0 or eight_danger > 0.6:
+            # 没有容易进球或黑8危险：防守
+            return 'defensive'
+        else:
+            # 默认：平衡策略
+            return 'balanced'
+    
+    def _generate_balanced_actions(self, balls, my_targets, table, strategy, game_state):
+        """生成平衡策略的动作"""
         actions = []
         cue_ball = balls.get('cue')
-        eight_ball = balls.get('8')
         
         if not cue_ball:
-            return []
+            return [self._random_action()]
         
         cue_pos = cue_ball.state.rvw[0]
+        own_remaining = game_state['own_remaining']
         
-        # 检查是否已清空己方球
-        own_balls_remaining = sum(1 for bid in my_targets 
-                                 if bid in balls and balls[bid].state.s != 4)
-        is_cleared = (own_balls_remaining == 0)
+        # 未清台时的特殊处理：标记黑8为"禁区"
+        avoid_eight = (own_remaining > 0)
         
-        # 如果未清台，黑8必须被避免
-        avoid_eight = not is_cleared
-        
-        # 获取可击打的目标球
-        available_targets = []
-        if is_cleared:
-            # 已清台：只打黑8
-            if '8' in balls and balls['8'].state.s != 4:
-                available_targets = ['8']
-        else:
-            # 未清台：只打己方球，绝对避免黑8
-            available_targets = [bid for bid in my_targets 
-                               if bid in balls and balls[bid].state.s != 4]
-        
-        # 额外安全措施：如果黑8在危险位置，生成防御性动作
-        if avoid_eight and eight_ball:
-            eight_pos = eight_ball.state.rvw[0]
-            if self._is_eight_ball_in_danger(eight_pos, cue_pos, table):
-                # 生成将黑8移动到安全位置的动作
-                actions.extend(self._generate_eight_ball_safety(
-                    cue_pos, eight_pos, balls, table
-                ))
-        
-        # 为每个目标球生成动作
-        for target_id in available_targets[:3]:  # 只考虑前3个
-            target_ball = balls[target_id]
-            target_pos = target_ball.state.rvw[0]
+        if strategy == 'aggressive_clearance':
+            # 积极清台：优先容易进球
+            actions.extend(self._generate_easy_shots_first(cue_pos, balls, my_targets, table, avoid_eight))
             
-            # 安全检查：目标球是否与黑8太近？
-            if avoid_eight and eight_ball:
-                eight_pos = eight_ball.state.rvw[0]
-                distance_to_eight = np.linalg.norm(np.array(target_pos) - np.array(eight_pos))
-                
-                if distance_to_eight < 0.15:  # 距离小于15cm，风险高
-                    # 生成安全击打（避免碰撞黑8）
-                    actions.extend(self._generate_safe_shot_avoiding_eight(
-                        cue_pos, target_pos, eight_pos, table
-                    ))
-                    continue
+        elif strategy == 'defensive':
+            # 防守：安全球为主
+            actions.extend(self._generate_smart_defense(cue_pos, balls, my_targets, table))
             
-            # 正常生成动作
-            if strategy == 'offensive':
-                actions.extend(self._generate_safe_offensive_shots(
-                    cue_pos, target_pos, target_id, table, avoid_eight
-                ))
+        elif strategy == 'mixed_endgame':
+            # 尾局混合：既有进攻也有防守
+            actions.extend(self._generate_endgame_shots(cue_pos, balls, my_targets, table, avoid_eight))
+            
+        elif strategy == 'eight_ball_only':
+            # 只打黑8
+            actions.extend(self._generate_eight_ball_shots(cue_pos, balls, table))
+            
+        else:  # 'balanced'
+            # 平衡：生成多样化的动作
+            actions.extend(self._generate_diversified_shots(cue_pos, balls, my_targets, table, avoid_eight))
         
-        return actions[:20]
-    
-    def _is_eight_ball_in_danger(self, eight_pos, cue_pos, table):
-        """检查黑8是否在危险位置（靠近袋口或可能被误击）"""
-        # 1. 检查黑8是否靠近袋口
-        for pocket_id, pocket in table.pockets.items():
-            pocket_pos = pocket.center
-            distance = np.linalg.norm(np.array(eight_pos) - np.array(pocket_pos))
-            if distance < 0.2:  # 20cm内认为危险
-                return True
+        # 限制数量并去重
+        if len(actions) > 30:
+            # 随机抽样，保持多样性
+            indices = random.sample(range(len(actions)), min(30, len(actions)))
+            actions = [actions[i] for i in indices]
         
-        # 2. 检查黑8是否在白球和目标球的连线上
-        # 这里简化处理，在实际应用中需要更多计算
-        return False
+        return actions
     
-    def _generate_eight_ball_safety(self, cue_pos, eight_pos, balls, table):
-        """将黑8移动到安全位置的动作"""
+    def _generate_easy_shots_first(self, cue_pos, balls, my_targets, table, avoid_eight):
+        """优先容易进球的动作生成"""
         actions = []
         
-        # 寻找安全位置（远离袋口）
-        safe_positions = self._find_safe_positions_for_eight(table)
+        # 找到最容易的3个目标球（按进球难度排序）
+        easy_targets = self._find_easiest_targets(cue_pos, balls, my_targets, table, n=3)
         
-        for safe_pos in safe_positions[:2]:
-            # 计算推击黑8到安全位置的击球参数
-            vec_to_safe = np.array(safe_pos) - np.array(eight_pos)
-            distance = np.linalg.norm(vec_to_safe)
-            
-            if distance < 0.1:  # 太近了，跳过
+        for target_id, difficulty, pocket_id in easy_targets:
+            if difficulty > 0.7:  # 太难了，跳过
                 continue
+                
+            target_pos = balls[target_id].state.rvw[0]
+            pocket_pos = table.pockets[pocket_id].center
             
-            # 计算击打角度（打黑8的侧面，使其滚动）
-            # 避免直接撞击中心，减少意外进袋
-            impact_point = np.array(eight_pos) + np.array([0.01, 0, 0])  # 轻微偏移
+            # 计算击球参数
+            phi = self._calculate_ghost_angle(cue_pos, target_pos, pocket_pos)
+            distance = np.linalg.norm(np.array(cue_pos) - np.array(target_pos))
             
-            vec_cue_to_impact = impact_point - np.array(cue_pos)
-            phi = math.degrees(math.atan2(vec_cue_to_impact[1], vec_cue_to_impact[0])) % 360
+            # 根据难度调整力度（容易的球用中等力度）
+            if difficulty < 0.3:
+                power = 2.5 + distance * 0.8  # 中等偏上
+            else:
+                power = 2.0 + distance * 1.0  # 标准
             
-            # 使用非常轻柔的力度
+            power = np.clip(power, 1.5, 4.5)
+            
+            # 基础动作
             actions.append({
-                'V0': min(1.5, distance * 0.8),
+                'V0': power,
                 'phi': phi,
                 'theta': 0,
                 'a': 0,
                 'b': 0,
-                'strategy': 'eight_safety',
-                'type': 'push_eight_away'
+                'strategy': 'easy_shot',
+                'target': target_id
             })
+            
+            # 添加一个轻微旋转变种（提高稳定性）
+            if distance > 0.5:
+                actions.append({
+                    'V0': power * 0.95,
+                    'phi': phi,
+                    'theta': 0,
+                    'a': 0,
+                    'b': -0.08,
+                    'strategy': 'easy_shot_with_draw'
+                })
+        
+        # 如果没有容易进球，生成一些中等难度的
+        if len(actions) < 5:
+            medium_targets = self._find_medium_targets(cue_pos, balls, my_targets, table, n=5)
+            for target_id, _, pocket_id in medium_targets:
+                target_pos = balls[target_id].state.rvw[0]
+                pocket_pos = table.pockets[pocket_id].center
+                phi = self._calculate_ghost_angle(cue_pos, target_pos, pocket_pos)
+                distance = np.linalg.norm(np.array(cue_pos) - np.array(target_pos))
+                
+                actions.append({
+                    'V0': 3.0 + distance * 0.5,
+                    'phi': phi,
+                    'theta': 0,
+                    'a': 0,
+                    'b': 0,
+                    'strategy': 'medium_shot'
+                })
         
         return actions
-```
-
-## 2. **在模拟评估阶段惩罚**
-
-```python
-def analyze_shot_for_reward_with_eight_safety(shot: pt.System, last_state: dict, player_targets: list):
-    """
-    增强版奖励分析，特别处理黑8犯规
-    """
-    # 1. 基本分析（与原函数相同）
-    new_pocketed = [bid for bid, b in shot.balls.items() if b.state.s == 4 and last_state[bid].state.s != 4]
     
-    # 2. 关键检查：未清台时打进黑8
-    eight_pocketed = "8" in new_pocketed
-    
-    # 检查是否已清空己方球
-    own_balls_remaining_before = sum(1 for bid in player_targets 
-                                    if bid in last_state and last_state[bid].state.s != 4)
-    is_cleared_before = (own_balls_remaining_before == 0)
-    
-    # 3. 严重犯规：未清台时黑8进袋
-    if eight_pocketed and not is_cleared_before:
-        # 这是一个致命错误，给予极大惩罚
-        return -1000  # 比普通犯规更严重的惩罚
-    
-    # 4. 其他分析与原函数相同
-    own_pocketed = [bid for bid in new_pocketed if bid in player_targets]
-    enemy_pocketed = [bid for bid in new_pocketed if bid not in player_targets and bid not in ["cue", "8"]]
-    cue_pocketed = "cue" in new_pocketed
-    
-    # ... 其余分析与原analyze_shot_for_reward相同 ...
-    
-    # 计算奖励分数
-    score = 0
-    
-    if cue_pocketed and eight_pocketed:
-        score -= 500
-    elif cue_pocketed:
-        score -= 100
-    elif eight_pocketed:
-        # 此时is_cleared_before已经是True
-        score += 150  # 合法打进黑8
+    def _generate_smart_defense(self, cue_pos, balls, my_targets, table):
+        """智能防守：不是单纯的安全球，而是制造麻烦"""
+        actions = []
         
-    # ... 其余计分逻辑 ...
+        # 1. 将白球藏在对方球后面
+        snooker_actions = self._generate_snooker_shots(cue_pos, balls, my_targets, table)
+        actions.extend(snooker_actions)
+        
+        # 2. 将黑8移动到安全位置（如果未清台）
+        own_remaining = sum(1 for bid in my_targets 
+                           if bid in balls and balls[bid].state.s != 4)
+        if own_remaining > 0 and '8' in balls:
+            eight_pos = balls['8'].state.rvw[0]
+            safety_actions = self._move_eight_to_safety(cue_pos, eight_pos, table, balls)
+            actions.extend(safety_actions)
+        
+        # 3. 将对方关键球打到难打的位置
+        opponent_actions = self._hinder_opponent(cue_pos, balls, my_targets, table)
+        actions.extend(opponent_actions)
+        
+        # 4. 基础安全球：白球回到开球区
+        back_to_baulk = self._return_to_baulk(cue_pos, table)
+        if back_to_baulk:
+            actions.append(back_to_baulk)
+        
+        return actions
     
-    return score
-```
-
-## 3. **在决策阶段加入黑8安全检查**
-
-```python
-class EightBallAwareAgent(Agent):
-    """专门处理黑8安全的Agent"""
+    def _generate_snooker_shots(self, cue_pos, balls, my_targets, table):
+        """制造斯诺克（障碍球）"""
+        actions = []
+        
+        # 找到对方的目标球
+        all_balls = set(['1','2','3','4','5','6','7','9','10','11','12','13','14','15'])
+        opponent_targets = [bid for bid in all_balls if bid not in my_targets]
+        opponent_balls = [bid for bid in opponent_targets 
+                         if bid in balls and balls[bid].state.s != 4]
+        
+        if not opponent_balls:
+            return actions
+        
+        # 随机选择一个对方球作为障碍
+        obstacle_id = random.choice(opponent_balls)
+        obstacle_pos = balls[obstacle_id].state.rvw[0]
+        
+        # 计算将白球打到这个球后面的位置
+        # 方法：计算从这个球到各袋口的反方向
+        for pocket_id, pocket in table.pockets.items():
+            pocket_pos = pocket.center
+            # 从球到袋口的向量
+            vec_to_pocket = np.array(pocket_pos) - np.array(obstacle_pos)
+            # 反方向（藏到球后面）
+            hide_direction = -vec_to_pocket / np.linalg.norm(vec_to_pocket)
+            hide_distance = 0.3  # 藏到30cm后面
+            hide_pos = np.array(obstacle_pos) + hide_direction * hide_distance
+            
+            # 确保位置在台内
+            hide_pos[0] = np.clip(hide_pos[0], 0.1, 2.74)
+            hide_pos[1] = np.clip(hide_pos[1], 0.1, 1.37)
+            
+            # 计算击打这个位置的参数
+            vec_to_hide = hide_pos - np.array(cue_pos)
+            phi = math.degrees(math.atan2(vec_to_hide[1], vec_to_hide[0])) % 360
+            distance = np.linalg.norm(vec_to_hide)
+            
+            actions.append({
+                'V0': min(3.0, 1.5 + distance * 0.5),
+                'phi': phi,
+                'theta': 0,
+                'a': 0,
+                'b': 0,
+                'strategy': 'snooker',
+                'obstacle': obstacle_id
+            })
+        
+        return actions[:3]  # 最多3个
     
-    def __init__(self):
-        super().__init__()
-        self.safe_generator = SafeActionGenerator()
-        self.remembered_mistakes = set()  # 记住导致黑8进袋的局面
+    def _hinder_opponent(self, cue_pos, balls, my_targets, table):
+        """妨碍对手：将对方关键球打到难打的位置"""
+        actions = []
         
-    def decision(self, balls=None, my_targets=None, table=None):
-        # 检查是否已清台
-        own_balls_remaining = sum(1 for bid in my_targets 
-                                 if bid in balls and balls[bid].state.s != 4)
-        is_cleared = (own_balls_remaining == 0)
+        # 找到对方最容易进的球，把它打走
+        all_balls = set(['1','2','3','4','5','6','7','9','10','11','12','13','14','15'])
+        opponent_targets = [bid for bid in all_balls if bid not in my_targets]
         
-        # 获取黑8状态
-        eight_ball = balls.get('8')
-        eight_in_play = (eight_ball and eight_ball.state.s != 4)
+        for target_id in opponent_targets:
+            if target_id not in balls or balls[target_id].state.s == 4:
+                continue
+                
+            target_pos = balls[target_id].state.rvw[0]
+            
+            # 检查这个球是否在容易进球的位置
+            easiest_pocket = self._find_easiest_pocket_for_ball(target_pos, table)
+            if easiest_pocket:
+                pocket_pos = table.pockets[easiest_pocket].center
+                dist_to_pocket = np.linalg.norm(np.array(target_pos) - np.array(pocket_pos))
+                
+                if dist_to_pocket < 0.4:  # 离袋口太近，危险！
+                    # 把这个球打走
+                    # 计算打到远离袋口的方向
+                    vec_away = np.array(target_pos) - np.array(pocket_pos)
+                    if np.linalg.norm(vec_away) < 0.01:
+                        vec_away = np.array([random.uniform(-1, 1), random.uniform(-1, 1), 0])
+                    
+                    vec_away = vec_away / np.linalg.norm(vec_away)
+                    target_hit_point = np.array(target_pos) + vec_away * self.ball_radius
+                    
+                    # 计算从白球到这个击打点的参数
+                    vec_cue_to_hit = target_hit_point - np.array(cue_pos)
+                    phi = math.degrees(math.atan2(vec_cue_to_hit[1], vec_cue_to_hit[0])) % 360
+                    distance = np.linalg.norm(vec_cue_to_hit)
+                    
+                    actions.append({
+                        'V0': min(4.0, 2.0 + distance * 0.8),
+                        'phi': phi,
+                        'theta': 0,
+                        'a': 0,
+                        'b': 0,
+                        'strategy': 'hinder_opponent',
+                        'target': target_id
+                    })
+                    
+                    if len(actions) >= 2:  # 最多妨碍2个球
+                        break
         
-        # 如果未清台且黑8在台面上，启用特殊安全模式
-        if not is_cleared and eight_in_play:
-            return self._safe_decision_mode(balls, my_targets, table)
-        else:
-            # 正常决策
-            return self._normal_decision_mode(balls, my_targets, table)
+        return actions
     
-    def _safe_decision_mode(self, balls, my_targets, table):
-        """安全决策模式：避免未清台时击打黑8"""
-        # 1. 生成绝对安全的动作
-        safe_actions = self.safe_generator.generate_safe_actions(
-            balls, my_targets, table, strategy='offensive'
-        )
+    def _find_easiest_targets(self, cue_pos, balls, my_targets, table, n=5):
+        """找到最容易进的n个目标球，返回(球ID, 难度分数, 袋口ID)列表"""
+        results = []
         
-        # 2. 额外生成一些防御性动作
-        defensive_actions = self.safe_generator.generate_safe_actions(
-            balls, my_targets, table, strategy='defensive'
-        )
+        for target_id in my_targets:
+            if target_id not in balls or balls[target_id].state.s == 4:
+                continue
+                
+            target_pos = balls[target_id].state.rvw[0]
+            
+            # 为这个球找到最佳袋口
+            best_pocket, difficulty = self._find_best_pocket_with_difficulty(
+                cue_pos, target_pos, table, balls
+            )
+            
+            if best_pocket:
+                results.append((target_id, difficulty, best_pocket))
         
-        all_actions = safe_actions + defensive_actions
+        # 按难度排序（难度越小越容易）
+        results.sort(key=lambda x: x[1])
+        return results[:n]
+    
+    def _find_best_pocket_with_difficulty(self, cue_pos, target_pos, table, balls):
+        """找到最佳袋口并计算进球难度（0-1，0最容易）"""
+        best_pocket = None
+        best_difficulty = float('inf')
         
-        if not all_actions:
-            # 没有安全动作，使用保守的随机动作
-            return self._ultra_conservative_action(balls, table)
+        for pocket_id, pocket in table.pockets.items():
+            pocket_pos = pocket.center
+            
+            # 计算理论进球角度
+            phi = self._calculate_ghost_angle(cue_pos, target_pos, pocket_pos)
+            
+            # 难度因素1：白球到目标球的距离
+            dist_cue_to_target = np.linalg.norm(np.array(cue_pos) - np.array(target_pos))
+            
+            # 难度因素2：目标球到袋口的距离
+            dist_target_to_pocket = np.linalg.norm(np.array(target_pos) - np.array(pocket_pos))
+            
+            # 难度因素3：角度是否正（正对袋口为0度，角度越大越难）
+            # 计算入射角
+            vec_target_to_pocket = np.array(pocket_pos) - np.array(target_pos)
+            vec_cue_to_target = np.array(target_pos) - np.array(cue_pos)
+            
+            if np.linalg.norm(vec_target_to_pocket) < 0.01 or np.linalg.norm(vec_cue_to_target) < 0.01:
+                angle_factor = 1.0
+            else:
+                dot = np.dot(vec_target_to_pocket[:2], vec_cue_to_target[:2])
+                norms = np.linalg.norm(vec_target_to_pocket[:2]) * np.linalg.norm(vec_cue_to_target[:2])
+                cos_angle = dot / (norms + 1e-6)
+                angle = math.degrees(math.acos(np.clip(cos_angle, -1.0, 1.0)))
+                angle_factor = min(1.0, angle / 45.0)  # 45度以内认为可接受
+            
+            # 难度因素4：是否有障碍
+            has_obstacle = self._check_obstacle(cue_pos, target_pos, pocket_pos, balls)
+            obstacle_factor = 1.5 if has_obstacle else 1.0
+            
+            # 综合难度
+            difficulty = (dist_cue_to_target * 0.3 + 
+                         dist_target_to_pocket * 0.3 + 
+                         angle_factor * 0.3) * obstacle_factor
+            
+            if difficulty < best_difficulty:
+                best_difficulty = difficulty
+                best_pocket = pocket_id
         
-        # 3. 模拟评估，特别关注黑8安全
-        best_action = self._evaluate_with_eight_safety(
-            all_actions, balls, my_targets, table
-        )
+        # 归一化难度到0-1范围（假设最大难度为3.0）
+        normalized_difficulty = min(1.0, best_difficulty / 3.0)
         
-        # 4. 最终检查：确保选择的动作不会直接瞄准黑8
-        if self._is_aiming_at_eight(best_action, balls, table):
-            print("[WARNING] 选择的动作可能击打黑8，改用防御性动作")
-            return self._select_defensive_action(balls, my_targets, table)
+        return best_pocket, normalized_difficulty
+    
+    def _quick_evaluation(self, actions, balls, my_targets, table):
+        """快速评估动作，选择最佳"""
+        if not actions:
+            return self._random_action()
+        
+        # 简单评估：基于启发式规则
+        best_action = None
+        best_score = -float('inf')
+        
+        for action in actions[:10]:  # 只评估前10个
+            score = self._estimate_action_score(action, balls, my_targets, table)
+            
+            if score > best_score:
+                best_score = score
+                best_action = action
+        
+        # 如果没有合适的，选择第一个
+        if not best_action:
+            best_action = actions[0]
+        
+        print(f"[BalancedAgent] 选择策略: {best_action.get('strategy', 'unknown')}, 预估得分: {best_score:.2f}")
         
         return best_action
     
-    def _is_aiming_at_eight(self, action, balls, table):
-        """检查动作是否直接瞄准黑8"""
-        cue_ball = balls.get('cue')
-        eight_ball = balls.get('8')
+    def _estimate_action_score(self, action, balls, my_targets, table):
+        """估计动作的得分（基于启发式，不实际模拟）"""
+        score = 0
         
-        if not cue_ball or not eight_ball:
-            return False
+        # 基本分
+        strategy = action.get('strategy', '')
+        if strategy == 'easy_shot':
+            score += 80
+        elif strategy == 'medium_shot':
+            score += 50
+        elif strategy == 'snooker':
+            score += 60
+        elif strategy == 'hinder_opponent':
+            score += 40
+        elif strategy == 'eight_ball_only':
+            score += 100
         
-        cue_pos = cue_ball.state.rvw[0]
-        eight_pos = eight_ball.state.rvw[0]
+        # 力度合理性（中等力度最佳）
+        v0 = action.get('V0', 3.0)
+        if 2.0 <= v0 <= 4.0:
+            score += 20
+        elif v0 > 6.0:
+            score -= 30  # 太大力
         
-        # 计算击球方向向量
-        phi_rad = math.radians(action['phi'])
-        direction = np.array([math.cos(phi_rad), math.sin(phi_rad), 0])
+        # 旋转合理性
+        b = action.get('b', 0)
+        if abs(b) > 0.3:
+            score -= 10  # 过多旋转增加不确定性
         
-        # 计算白球到黑8的向量
-        vec_to_eight = np.array(eight_pos) - np.array(cue_pos)
-        vec_to_eight_2d = vec_to_eight[:2] / np.linalg.norm(vec_to_eight[:2])
-        direction_2d = direction[:2] / np.linalg.norm(direction[:2])
-        
-        # 计算角度差
-        dot_product = np.dot(direction_2d, vec_to_eight_2d)
-        angle_diff = math.degrees(math.acos(np.clip(dot_product, -1.0, 1.0)))
-        
-        # 如果角度差小于5度，认为是在瞄准黑8
-        return angle_diff < 5.0
-    
-    def _ultra_conservative_action(self, balls, table):
-        """生成极度保守的动作"""
-        cue_ball = balls.get('cue')
-        if not cue_ball:
-            return self._random_action()
-        
-        cue_pos = cue_ball.state.rvw[0]
-        
-        # 寻找最安全的击球方向（远离所有球和袋口）
-        safe_direction = self._find_safest_direction(cue_pos, balls, table)
-        
-        return {
-            'V0': 1.2,  # 非常轻柔
-            'phi': safe_direction,
-            'theta': 0,
-            'a': 0,
-            'b': 0
-        }
+        return score
 ```
 
-## 4. **在MCTS搜索中整合黑8安全**
+## 2. **专门针对 basic_agent_pro 弱点的攻击策略**
 
 ```python
-class SafeMCTSAgent(Agent):
-    """安全的MCTS Agent，避免黑8犯规"""
-    
-    def __init__(self, n_simulations=50):
-        super().__init__()
-        self.n_simulations = n_simulations
-        self.eight_safety_weight = 10.0  # 黑8安全的权重
-        
-    def _mcts_search_with_safety(self, actions, balls, my_targets, table, last_state):
-        """带黑8安全考量的MCTS搜索"""
-        N = np.zeros(len(actions))
-        Q = np.zeros(len(actions))
-        S = np.zeros(len(actions))  # 安全性评分
-        
-        own_balls_remaining = sum(1 for bid in my_targets 
-                                 if bid in balls and balls[bid].state.s != 4)
-        avoid_eight = (own_balls_remaining > 0)
-        
-        for i in range(self.n_simulations):
-            # 选择阶段：考虑安全性
-            if i < len(actions):
-                idx = i
-            else:
-                # UCB公式加入安全性考量
-                safety_penalty = S / (N + 1e-6) * self.eight_safety_weight
-                total_n = np.sum(N)
-                ucb_values = (Q / (N + 1e-6)) + 1.414 * np.sqrt(np.log(total_n + 1) / (N + 1e-6)) - safety_penalty
-                idx = np.argmax(ucb_values)
-            
-            # 模拟
-            shot = self._simulate_action(balls, table, actions[idx])
-            
-            # 评估：特别检查黑8
-            if shot is None:
-                reward = -1000
-                safety_score = 1.0  # 模拟失败视为不安全
-            else:
-                # 检查黑8是否进袋
-                eight_pocketed = "8" in [bid for bid, b in shot.balls.items() 
-                                        if b.state.s == 4 and last_state[bid].state.s != 4]
-                
-                if avoid_eight and eight_pocketed:
-                    reward = -1000  # 严重惩罚
-                    safety_score = 1.0
-                else:
-                    reward = analyze_shot_for_reward(shot, last_state, my_targets)
-                    # 计算安全性评分（黑8是否被扰动）
-                    safety_score = self._calculate_safety_score(shot, last_state)
-            
-            # 回传
-            N[idx] += 1
-            Q[idx] += reward
-            S[idx] += safety_score
-        
-        # 选择：平衡奖励和安全性
-        avg_rewards = Q / (N + 1e-6)
-        avg_safety = 1.0 - (S / (N + 1e-6))  # 转换为安全性分数（越高越安全）
-        
-        # 综合评分 = 奖励 * 安全性
-        combined_scores = avg_rewards * avg_safety
-        
-        best_idx = np.argmax(combined_scores)
-        
-        # 如果最佳动作仍然有高风险，记录警告
-        if avoid_eight and avg_safety[best_idx] < 0.3:
-            print("[SAFETY WARNING] 选择高风险动作，黑8可能被扰动")
-        
-        return actions[best_idx]
-    
-    def _calculate_safety_score(self, shot, last_state):
-        """计算击球的安全性评分（0-1，越高越安全）"""
-        # 检查黑8是否被移动
-        eight_before = last_state.get('8')
-        eight_after = shot.balls.get('8')
-        
-        if not eight_before or not eight_after:
-            return 1.0
-        
-        # 黑8是否进袋（已在主函数检查，这里作为冗余）
-        if eight_after.state.s == 4 and eight_before.state.s != 4:
-            return 0.0
-        
-        # 黑8是否被显著移动
-        pos_before = np.array(eight_before.state.rvw[0])
-        pos_after = np.array(eight_after.state.rvw[0])
-        movement = np.linalg.norm(pos_after - pos_before)
-        
-        # 移动越小越安全
-        safety = max(0.0, 1.0 - movement / 0.5)  # 移动超过0.5米视为不安全
-        
-        return safety
-```
-
-## 5. **实时监控和自适应调整**
-
-```python
-class AdaptiveEightSafetyAgent(Agent):
-    """自适应黑8安全Agent，从错误中学习"""
+class AntiBasicAgentPro(Agent):
+    """专门针对 basic_agent_pro 弱点的Agent"""
     
     def __init__(self):
         super().__init__()
-        self.eight_danger_zones = []  # 记录黑8的危险位置
-        self.foul_history = []  # 犯规历史
-        self.conservatism_level = 0.5  # 保守程度（0-1）
         
-    def learn_from_foul(self, balls_before, action_taken, foul_type):
-        """从犯规中学习"""
-        if foul_type == "eight_ball_premature":
-            # 记录导致犯规的局面
-            eight_pos = balls_before['8'].state.rvw[0] if '8' in balls_before else None
-            if eight_pos:
-                self.eight_danger_zones.append({
-                    'position': eight_pos,
-                    'action': action_taken,
-                    'timestamp': datetime.now()
-                })
-            
-            # 增加保守程度
-            self.conservatism_level = min(1.0, self.conservatism_level + 0.1)
-            print(f"[LEARNING] 因黑8犯规增加保守程度到 {self.conservatism_level}")
+        # basic_agent_pro 的弱点分析：
+        # 1. 倾向于打容易的球（近距离、正对袋口）
+        # 2. 防守能力弱（基本只有进攻）
+        # 3. 对复杂局面处理能力有限
         
-        self.foul_history.append({
-            'type': foul_type,
-            'action': action_taken,
-            'time': datetime.now()
-        })
+        # 我们的对策：
+        self.strategies = {
+            'steal_easy_shots': 0.4,      # 抢走容易的球
+            'create_complexity': 0.3,     # 制造复杂局面
+            'force_mistakes': 0.2,        # 迫使对方犯错
+            'defensive_when_ahead': 0.1,  # 领先时防守
+        }
     
-    def decision(self, balls=None, my_targets=None, table=None):
-        # 检查黑8是否在已知的危险区域
-        eight_ball = balls.get('8')
-        if eight_ball:
-            eight_pos = eight_ball.state.rvw[0]
-            
-            for danger_zone in self.eight_danger_zones[-5:]:  # 最近5个危险区域
-                danger_pos = danger_zone['position']
-                distance = np.linalg.norm(np.array(eight_pos) - np.array(danger_pos))
-                
-                if distance < 0.1:  # 接近已知危险区域
-                    print(f"[CAUTION] 黑8接近已知危险区域，使用超级保守策略")
-                    return self._super_conservative_action(balls, table, danger_zone['action'])
+    def decision(self, balls, my_targets, table):
+        # 分析局面：我们是否领先？
+        own_remaining = sum(1 for bid in my_targets 
+                           if bid in balls and balls[bid].state.s != 4)
+        all_balls = set(['1','2','3','4','5','6','7','9','10','11','12','13','14','15'])
+        opponent_targets = [bid for bid in all_balls if bid not in my_targets]
+        opponent_remaining = sum(1 for bid in opponent_targets 
+                                if bid in balls and balls[bid].state.s != 4)
         
-        # 根据保守程度调整策略
-        if random.random() < self.conservatism_level:
-            # 使用保守策略
-            return self._conservative_decision(balls, my_targets, table)
+        is_ahead = (own_remaining < opponent_remaining)
+        
+        if is_ahead and own_remaining <= 3:
+            # 领先且接近胜利：保守但积极的策略
+            return self._winning_strategy(balls, my_targets, table)
         else:
-            # 使用正常策略
-            return self._normal_decision(balls, my_targets, table)
+            # 均势或落后：积极进攻，抢走容易的球
+            return self._aggressive_steal_strategy(balls, my_targets, table)
     
-    def _super_conservative_action(self, balls, table, dangerous_action):
-        """生成避开已知危险动作的保守动作"""
+    def _aggressive_steal_strategy(self, balls, my_targets, table):
+        """积极抢球策略：专门打 basic_agent_pro 想打的球"""
         cue_ball = balls.get('cue')
         if not cue_ball:
             return self._random_action()
         
         cue_pos = cue_ball.state.rvw[0]
         
-        # 寻找与危险动作相反的方向
-        dangerous_phi = dangerous_action.get('phi', 0)
-        safe_phi = (dangerous_phi + 180) % 360  # 相反方向
+        # 1. 找到所有容易进的球（包括对方的！）
+        all_easy_shots = self._find_all_easy_shots(cue_pos, balls, table)
         
-        return {
-            'V0': 1.0,  # 非常轻柔
-            'phi': safe_phi,
-            'theta': 0,
-            'a': 0,
-            'b': -0.1,  # 轻微拉杆，白球回退
-            'strategy': 'avoid_known_danger'
-        }
-```
-
-## 6. **集成到你的AdvancedPoolAI中**
-
-```python
-class SafeAdvancedPoolAI(AdvancedPoolAI):
-    """安全的AdvancedPoolAI版本"""
+        # 2. 优先打己方的容易球
+        my_easy_shots = [shot for shot in all_easy_shots if shot['ball_id'] in my_targets]
+        
+        if my_easy_shots:
+            # 选择最容易的那个
+            easiest = min(my_easy_shots, key=lambda x: x['difficulty'])
+            return self._generate_shot_for_target(
+                cue_pos, 
+                balls[easiest['ball_id']].state.rvw[0],
+                table.pockets[easiest['pocket_id']].center,
+                power_factor=0.9  # 稍微轻一点，确保稳定
+            )
+        
+        # 3. 如果没有己方的容易球，考虑打对方的容易球（制造混乱）
+        opponent_easy_shots = [shot for shot in all_easy_shots if shot['ball_id'] not in my_targets]
+        
+        if opponent_easy_shots:
+            # 选择对方的容易球，把它打走或打进
+            target_shot = random.choice(opponent_easy_shots[:2])
+            target_pos = balls[target_shot['ball_id']].state.rvw[0]
+            
+            # 有两种选择：
+            if random.random() < 0.7:
+                # a. 打进这个球（给对方制造麻烦）
+                return self._generate_shot_for_target(
+                    cue_pos, target_pos,
+                    table.pockets[target_shot['pocket_id']].center,
+                    power_factor=1.1  # 稍微重一点，确保进
+                )
+            else:
+                # b. 把这个球打走（让它更难打）
+                return self._generate_disrupt_shot(cue_pos, target_pos, table, balls)
+        
+        # 4. 都没有：正常进攻
+        return self._normal_offensive_shot(balls, my_targets, table)
     
-    def __init__(self, mode='auto'):
-        super().__init__(mode)
-        self.safe_generator = SafeActionGenerator()
-        self.eight_safety_agent = EightBallAwareAgent()
+    def _find_all_easy_shots(self, cue_pos, balls, table):
+        """找到台面上所有容易进的球（无论敌我）"""
+        easy_shots = []
         
-    def decision(self, balls=None, my_targets=None, table=None):
-        # 1. 检查是否未清台
-        own_balls_remaining = sum(1 for bid in my_targets 
-                                 if bid in balls and balls[bid].state.s != 4)
+        for ball_id, ball in balls.items():
+            if ball_id == 'cue' or ball.state.s == 4:
+                continue
+                
+            ball_pos = ball.state.rvw[0]
+            
+            # 检查各个袋口
+            for pocket_id, pocket in table.pockets.items():
+                pocket_pos = pocket.center
+                
+                # 计算难度
+                difficulty = self._calculate_shot_difficulty(
+                    cue_pos, ball_pos, pocket_pos, balls
+                )
+                
+                if difficulty < 0.4:  # 容易球
+                    easy_shots.append({
+                        'ball_id': ball_id,
+                        'pocket_id': pocket_id,
+                        'difficulty': difficulty,
+                        'distance': np.linalg.norm(np.array(cue_pos) - np.array(ball_pos))
+                    })
         
-        if own_balls_remaining > 0:  # 未清台
-            print(f"[SAFE MODE] 未清台（剩余{own_balls_remaining}个己方球），启用黑8保护")
-            # 使用安全的决策模式
-            return self.eight_safety_agent._safe_decision_mode(balls, my_targets, table)
-        else:  # 已清台
-            print("[NORMAL MODE] 已清台，正常击打黑8")
-            # 使用父类的正常决策
-            return super().decision(balls, my_targets, table)
-```
-
-## **快速解决方案：**
-
-如果你需要立即解决问题，最简单有效的方法是：
-
-```python
-# 在现有的decision函数开头添加这个检查
-def decision(self, balls=None, my_targets=None, table=None):
-    if balls is None: 
+        # 按难度排序
+        easy_shots.sort(key=lambda x: x['difficulty'])
+        return easy_shots
+    
+    def _generate_disrupt_shot(self, cue_pos, target_pos, table, balls):
+        """制造混乱的击球：把球打到难打的位置"""
+        # 找到最难打到的袋口（距离最远）
+        worst_pocket = None
+        max_distance = 0
+        
+        for pocket_id, pocket in table.pockets.items():
+            pocket_pos = pocket.center
+            distance = np.linalg.norm(np.array(target_pos) - np.array(pocket_pos))
+            if distance > max_distance:
+                max_distance = distance
+                worst_pocket = pocket_id
+        
+        if worst_pocket:
+            pocket_pos = table.pockets[worst_pocket].center
+            
+            # 不是直接瞄准袋口，而是把球打到那个方向
+            vec_to_worst = np.array(pocket_pos) - np.array(target_pos)
+            vec_to_worst = vec_to_worst / np.linalg.norm(vec_to_worst)
+            
+            # 击打点稍微偏离中心，制造旋转
+            hit_point = np.array(target_pos) + vec_to_worst * self.ball_radius
+            
+            vec_cue_to_hit = hit_point - np.array(cue_pos)
+            phi = math.degrees(math.atan2(vec_cue_to_hit[1], vec_cue_to_hit[0])) % 360
+            distance = np.linalg.norm(vec_cue_to_hit)
+            
+            return {
+                'V0': min(4.5, 2.5 + distance * 0.7),
+                'phi': phi,
+                'theta': 0,
+                'a': 0,
+                'b': 0.1,  # 轻微推杆
+                'strategy': 'disrupt'
+            }
+        
         return self._random_action()
-    
-    # ===== 关键检查：未清台时绝对避免黑8 =====
-    own_balls_remaining = sum(1 for bid in my_targets 
-                             if bid in balls and balls[bid].state.s != 4)
-    
-    if own_balls_remaining > 0:  # 未清台
-        # 强制过滤掉任何可能击打黑8的动作
-        # 方法1：从my_targets中移除'8'
-        if '8' in my_targets:
-            my_targets = [bid for bid in my_targets if bid != '8']
-        
-        # 方法2：在生成动作时跳过以黑8为目标
-        # 修改generate_heuristic_actions，跳过'8'
-    
-    # ===== 继续原有逻辑 =====
-    remaining = [bid for bid in my_targets if bid in balls and balls[bid].state.s != 4]
-    if len(remaining) == 0: 
-        my_targets = ["8"]  # 只有清台后才设为['8']
-    
-    # ... 其余代码 ...
 ```
 
-这个简单修改可以立即解决80%的黑8过早进袋问题。然后你可以逐步实现更复杂的安全机制。
+## 3. **集成到你的AdvancedPoolAI中**
+
+```python
+class CompetitiveAdvancedPoolAI(AdvancedPoolAI):
+    """竞技版AdvancedPoolAI，专门针对对手弱点"""
+    
+    def __init__(self, mode='adaptive'):
+        super().__init__(mode)
+        
+        # 添加专门针对basic_agent_pro的策略
+        self.anti_basic_agent = AntiBasicAgentPro()
+        self.balanced_agent = BalancedAgent(risk_tolerance=0.6)
+        
+        # 记录对手表现
+        self.opponent_performance = {
+            'clearance_rate': 0.5,  # 清台率
+            'mistake_rate': 0.2,    # 犯错率
+            'aggressiveness': 0.7,  # 进攻性
+        }
+        
+        # 自适应策略选择
+        self.current_strategy = 'balanced'
+    
+    def decision(self, balls=None, my_targets=None, table=None):
+        # 根据对手表现调整策略
+        self._adapt_to_opponent()
+        
+        # 选择策略
+        if self.current_strategy == 'anti_basic':
+            return self.anti_basic_agent.decision(balls, my_targets, table)
+        elif self.current_strategy == 'balanced':
+            return self.balanced_agent.decision(balls, my_targets, table)
+        else:
+            # 默认使用父类的智能决策
+            return super().decision(balls, my_targets, table)
+    
+    def _adapt_to_opponent(self):
+        """根据对手表现调整策略"""
+        # 如果对手清台率高，我们需要更防守
+        if self.opponent_performance['clearance_rate'] > 0.7:
+            self.current_strategy = 'anti_basic'
+            print("[Adaptive] 对手清台率高，启用针对性策略")
+        
+        # 如果对手犯错率高，我们可以更激进
+        elif self.opponent_performance['mistake_rate'] > 0.3:
+            self.current_strategy = 'balanced'
+            self.balanced_agent.risk_tolerance = 0.8  # 提高风险容忍度
+            print("[Adaptive] 对手犯错多，启用激进策略")
+        
+        else:
+            self.current_strategy = 'balanced'
+            self.balanced_agent.risk_tolerance = 0.6  # 默认
+    
+    def update_opponent_performance(self, opponent_shot_result):
+        """更新对手表现数据"""
+        # opponent_shot_result 应该是一个字典，包含：
+        # {'balls_pocketed': [], 'foul': False, 'turn_continued': True}
+        
+        # 简化更新逻辑
+        if opponent_shot_result.get('foul', False):
+            self.opponent_performance['mistake_rate'] = (
+                0.9 * self.opponent_performance['mistake_rate'] + 0.1
+            )
+        else:
+            self.opponent_performance['mistake_rate'] *= 0.95
+        
+        # 如果对手连续进球，提高清台率估计
+        balls_pocketed = opponent_shot_result.get('balls_pocketed', [])
+        if len(balls_pocketed) > 0:
+            self.opponent_performance['clearance_rate'] = (
+                0.9 * self.opponent_performance['clearance_rate'] + 0.1
+            )
+        else:
+            self.opponent_performance['clearance_rate'] *= 0.95
+```
+
+## 4. **快速起效的关键修改**
+
+如果你只需要几个立即有效的修改：
+
+```python
+# 在你的AdvancedPoolAI的decision方法中添加：
+def decision(self, balls=None, my_targets=None, table=None):
+    # 在开头添加进攻性检查
+    cue_ball = balls.get('cue')
+    if cue_ball:
+        cue_pos = cue_ball.state.rvw[0]
+        
+        # 关键1：如果有非常容易的球，优先打
+        very_easy = self._find_very_easy_shot(cue_pos, balls, my_targets, table)
+        if very_easy:
+            print(f"[QUICK WIN] 发现极容易球: {very_easy['target']}")
+            return very_easy['action']
+    
+    # 关键2：根据球权决定策略
+    # 如果是我们的回合，且对方剩球少，要积极进攻
+    own_remaining = sum(1 for bid in my_targets 
+                       if bid in balls and balls[bid].state.s != 4)
+    all_balls = set(['1','2','3','4','5','6','7','9','10','11','12','13','14','15'])
+    opponent_targets = [bid for bid in all_balls if bid not in my_targets]
+    opponent_remaining = sum(1 for bid in opponent_targets 
+                            if bid in balls and balls[bid].state.s != 4)
+    
+    if own_remaining < opponent_remaining:
+        # 我们领先：可以稍微保守
+        risk_factor = 0.4
+    elif own_remaining == opponent_remaining:
+        # 平局：平衡
+        risk_factor = 0.6
+    else:
+        # 落后：必须激进
+        risk_factor = 0.8
+    
+    # 修改MCTS的探索参数
+    self.c_puct = 0.5 + risk_factor  # 更激进时减少探索
+    
+    # 继续原有逻辑...
+```
+
+## **策略建议：**
+
+1. **先测试BalancedAgent**：它的平衡策略应该能立即改善表现
+2. **针对弱点**：使用AntiBasicAgentPro的策略专门针对basic_agent_pro
+3. **动态调整**：根据比赛进程实时调整策略
+
+关键是要在**避免黑8犯规**和**积极进攻**之间找到平衡点。basic_agent_pro的弱点是防守能力差，所以我们可以：
+- 抢走所有容易的球
+- 制造复杂局面
+- 在领先时适当防守
+
+这样应该能显著提高胜率。
