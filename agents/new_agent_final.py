@@ -8,6 +8,7 @@ import numpy as np
 import pooltool as pt
 
 from .agent import Agent
+from .decision_logger import logger, Candidate
 
 
 ActionDict = Dict[str, float]
@@ -99,6 +100,26 @@ class BasePoolAgent(Agent):
             return self._random_action()
 
         best_score, best_action, best_info = max(refined_results, key=lambda item: item[0])
+
+        # --- Decision Logging ---
+        refined_results.sort(key=lambda item: item[0], reverse=True)
+        log_cands: List[Candidate] = []
+        for sc, _act, inf in refined_results[:30]:
+            log_cands.append(Candidate(
+                score=sc,
+                strategy=str(inf.get("strategy", "unknown")),
+                confidence=float(inf.get("clearance", 0.0)),
+                metadata=f"bal={inf.get('_balanced_priority',0.0):.2f}" if "_balanced_priority" in inf else ""
+            ))
+        
+        logger.log_decision(
+            step_type=f"Base_{phase}",
+            chosen_score=best_score,
+            candidates=log_cands,
+            best_strategy=str(best_info.get("strategy", "unknown"))
+        )
+        # ------------------------
+
         print(
             f"[BasePoolAgent] strategy={best_info.get('strategy')} target={best_info.get('target')} "
             f"pocket={best_info.get('pocket')} score={best_score:.1f}"
@@ -728,6 +749,25 @@ class BreakAgent(BasePoolAgent):
             scored.append((score, mutated, info))
 
         best = max(scored, key=lambda item: item[0])
+
+        # --- Break Logging ---
+        log_cands: List[Candidate] = []
+        scored.sort(key=lambda item: item[0], reverse=True)
+        for sc, _, inf in scored:
+            log_cands.append(Candidate(
+                score=sc,
+                strategy=str(inf.get("strategy", "break")),
+                confidence=float(inf.get("clearance", 1.0)),
+                metadata=f"var={inf.get('variant')}"
+            ))
+        logger.log_decision(
+            step_type="Break",
+            chosen_score=best[0],
+            candidates=log_cands,
+            best_strategy="break_expert"
+        )
+        # ---------------------
+
         print(
             f"[BreakAgent] variant={best[2].get('variant')} score={best[0]:.1f} strategy=break"
         )
@@ -1092,6 +1132,25 @@ class SafetyAgent(BreakAgent):
             return None
 
         best_score, best_action, best_info = max(evaluated, key=lambda item: item[0])
+
+        # --- Safety Logging ---
+        log_cands: List[Candidate] = []
+        evaluated.sort(key=lambda item: item[0], reverse=True)
+        for sc, _, inf in evaluated[:30]:
+            log_cands.append(Candidate(
+                score=sc,
+                strategy=str(inf.get("strategy", "safety")),
+                confidence=float(inf.get("clearance", 0.0)),
+                metadata=f"tgt={inf.get('target')} var={inf.get('variant')}"
+            ))
+        logger.log_decision(
+            step_type="Safety",
+            chosen_score=best_score,
+            candidates=log_cands,
+            best_strategy=str(best_info.get("strategy"))
+        )
+        # ----------------------
+
         if self._needs_eight_protection(balls, my_targets) and self._is_aiming_directly_at_eight(best_action, balls):
             return self._fallback_defensive_action(balls, table)
 
