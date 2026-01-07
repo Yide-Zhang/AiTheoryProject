@@ -24,7 +24,7 @@ import random
 # 导入必要的模块
 from utils import set_random_seed
 from poolenv import PoolEnv
-from agents import BasicAgent, BasicAgentPro, FastHybridAgentV1, FastHybridAgentV2, IntegratedAgent, FastHybridAgentV3
+from agents import BasicAgent, BasicAgentPro, NewAgentFinal
 
 # 设置随机种子，enable=True 时使用固定种子，enable=False 时使用完全随机
 # 根据需求，我们在这里统一设置随机种子，确保 agent 双方的全局击球扰动使用相同的随机状态
@@ -35,8 +35,8 @@ results = {'AGENT_A_WIN': 0, 'AGENT_B_WIN': 0, 'SAME': 0}
 n_games = 40  # 对战局数 自己测试时可以修改 扩充为120局为了减少随机带来的扰动
 
 ## 选择对打的对手
-# agent_a, agent_b = BasicAgent(), IntegratedAgent() # 与 BasicAgent 对打
-agent_a, agent_b = BasicAgent(), FastHybridAgentV3() # 与 BasicAgentPro 对打
+# agent_a, agent_b = BasicAgent(), NewAgentFinal() # 与 BasicAgent 对打
+agent_a, agent_b = BasicAgent(), NewAgentFinal() # 与 BasicAgentPro 对打
 
 # we are agent_b
 players = [agent_a, agent_b]  # 用于切换先后手
