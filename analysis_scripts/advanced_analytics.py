@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from poolenv import PoolEnv
-from agents import BasicAgentPro, NewAgentFinal
+from agents import BasicAgent, NewAgentFinal
 from utils import set_random_seed
 
 # 设置中文字体，尝试几个常见的中文字体
@@ -27,18 +27,18 @@ def run_advanced_analytics():
     n_games = 50 
     
     # 初始化 Agent
-    agent_baseline = BasicAgentPro()
+    agent_baseline = BasicAgent()
     agent_hero = NewAgentFinal()
     
     # 映射名称到 ID
     agent_map = {
-        'BasicAgentPro': agent_baseline,
+        'BasicAgent': agent_baseline,
         'NewAgentFinal': agent_hero
     }
     
     # 统计数据结构
     stats = {
-        'BasicAgentPro': {
+        'BasicAgent': {
             'games_played': 0, 'games_won': 0,
             'shots_total': 0, 'shots_potted': 0, 'fouls': 0,
             'streaks': [], 'current_streak': 0,
@@ -65,13 +65,13 @@ def run_advanced_analytics():
         # 偶数局: A=Basic, B=New
         # 奇数局: A=New, B=Basic
         if i % 2 == 0:
-            pA_name = 'BasicAgentPro'
+            pA_name = 'BasicAgent'
             pB_name = 'NewAgentFinal'
             pA_agent = agent_baseline
             pB_agent = agent_hero
         else:
             pA_name = 'NewAgentFinal'
-            pB_name = 'BasicAgentPro'
+            pB_name = 'BasicAgent'
             pA_agent = agent_hero
             pB_agent = agent_baseline
             
@@ -127,7 +127,7 @@ def run_advanced_analytics():
                 if stats[current_agent_name]['current_streak'] > 0:
                     stats[current_agent_name]['streaks'].append(stats[current_agent_name]['current_streak'])
                 
-                stats['BasicAgentPro']['games_played'] += 1
+                stats['BasicAgent']['games_played'] += 1
                 stats['NewAgentFinal']['games_played'] += 1
                 
                 if winner_symbol != 'SAME':
@@ -172,10 +172,10 @@ def run_advanced_analytics():
     
     # 获取数据
     val_basic = [
-        df[df['Agent']=='BasicAgentPro']['Potting Accuracy'].values[0],
-        df[df['Agent']=='BasicAgentPro']['Foul Rate'].values[0],
-        df[df['Agent']=='BasicAgentPro']['Avg Streak'].values[0],
-        df[df['Agent']=='BasicAgentPro']['Avg Shots per Win'].values[0]
+        df[df['Agent']=='BasicAgent']['Potting Accuracy'].values[0],
+        df[df['Agent']=='BasicAgent']['Foul Rate'].values[0],
+        df[df['Agent']=='BasicAgent']['Avg Streak'].values[0],
+        df[df['Agent']=='BasicAgent']['Avg Shots per Win'].values[0]
     ]
     
     val_new = [
@@ -186,7 +186,7 @@ def run_advanced_analytics():
     ]
     
     # 绘制
-    rects1 = ax.bar(x - width/2, val_basic, width, label='BasicAgentPro', color='#888888')
+    rects1 = ax.bar(x - width/2, val_basic, width, label='BasicAgent', color='#888888')
     rects2 = ax.bar(x + width/2, val_new, width, label='NewAgentFinal', color='#2ca02c') # Green for hero
     
     ax.set_ylabel('Value')
@@ -214,7 +214,7 @@ def run_advanced_analytics():
     
     # 2. 连续进球能力分布 (Streak Distribution) - 很专业的指标
     # 统计两个agent的所有streaks
-    streaks_basic = stats['BasicAgentPro']['streaks']
+    streaks_basic = stats['BasicAgent']['streaks']
     streaks_new = stats['NewAgentFinal']['streaks']
     
     plt.figure(figsize=(10, 6))
@@ -222,7 +222,7 @@ def run_advanced_analytics():
     max_s = max(max(streaks_basic) if streaks_basic else 1, max(streaks_new) if streaks_new else 1)
     bins = np.arange(1, max_s + 2) - 0.5
     
-    plt.hist([streaks_basic, streaks_new], bins=bins, label=['BasicAgentPro', 'NewAgentFinal'], 
+    plt.hist([streaks_basic, streaks_new], bins=bins, label=['BasicAgent', 'NewAgentFinal'], 
              color=['#888888', '#2ca02c'], density=True)
     
     plt.title('Consecutive Potting Probability (Break Building)')
